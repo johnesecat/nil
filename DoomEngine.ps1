@@ -13,53 +13,47 @@ param(
 )
 
 # ==============================================================================
-# 0. PRE-INITIALIZATION & WIN32 TYPE DEFINITIONS
+# 0. PRE-INITIALIZATION & TYPE DEFINITIONS
 # ==============================================================================
 
-# We combine EVERYTHING into one class to avoid scope issues between Add-Type calls.
-# Constants must be inside a class/struct, not floating in a namespace.
-$CSharpCode = @"
+$AllCSharp = @"
 using System;
 using System.Runtime.InteropServices;
 
 namespace Native {
-    
-    // --- Structs ---
-    [StructLayout(LayoutKind.Explicit)]
-    public struct INPUT_RECORD {
-        [FieldOffset(0)] public ushort EventType;
-        [FieldOffset(4)] public KEY_EVENT_RECORD KeyEvent;
-        [FieldOffset(4)] public MOUSE_EVENT_RECORD MouseEvent;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct KEY_EVENT_RECORD {
-        public bool bKeyDown;
-        public ushort wRepeatCount;
-        public ushort wVirtualKeyCode;
-        public ushort wVirtualScanCode;
-        public char uChar;
-        public uint dwControlKeyState;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct MOUSE_EVENT_RECORD {
-        public int dwMousePosition_X;
-        public int dwMousePosition_Y;
-        public uint dwButtonState;
-        public uint dwControlKeyState;
-        public uint dwEventFlags;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct CONSOLE_CURSOR_INFO {
-        public uint dwSize;
-        public bool bVisible;
-    }
-
-    // --- Main Helper Class containing Constants and Methods ---
     public static class Win32 {
-        // Constants
+        [StructLayout(LayoutKind.Explicit)]
+        public struct INPUT_RECORD {
+            [FieldOffset(0)] public ushort EventType;
+            [FieldOffset(4)] public KEY_EVENT_RECORD KeyEvent;
+            [FieldOffset(4)] public MOUSE_EVENT_RECORD MouseEvent;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct KEY_EVENT_RECORD {
+            public bool bKeyDown;
+            public ushort wRepeatCount;
+            public ushort wVirtualKeyCode;
+            public ushort wVirtualScanCode;
+            public char uChar;
+            public uint dwControlKeyState;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MOUSE_EVENT_RECORD {
+            public int dwMousePosition_X;
+            public int dwMousePosition_Y;
+            public uint dwButtonState;
+            public uint dwControlKeyState;
+            public uint dwEventFlags;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct CONSOLE_CURSOR_INFO {
+            public uint dwSize;
+            public bool bVisible;
+        }
+
         public const int STD_INPUT_HANDLE = -10;
         public const int STD_OUTPUT_HANDLE = -11;
         public const int ENABLE_MOUSE_INPUT = 0x0010;
@@ -70,25 +64,24 @@ namespace Native {
         public const int KEY_EVENT = 0x0001;
         public const int MOUSE_EVENT = 0x0002;
 
-        // P/Invoke Methods
         [DllImport("kernel32.dll", SetLastError = true)]
         public static extern IntPtr GetStdHandle(int nStdHandle);
-
+        
         [DllImport("kernel32.dll", SetLastError = true)]
         public static extern bool GetConsoleMode(IntPtr hConsoleOutput, ref uint lpMode);
-
+        
         [DllImport("kernel32.dll", SetLastError = true)]
         public static extern bool SetConsoleMode(IntPtr hConsoleOutput, uint dwMode);
-
+        
         [DllImport("kernel32.dll", SetLastError = true)]
         public static extern bool SetConsoleCursorPosition(IntPtr hConsoleOutput, int dwCursorPosition);
-
+        
         [DllImport("kernel32.dll", SetLastError = true)]
         public static extern bool SetConsoleCursorInfo(IntPtr hConsoleOutput, ref CONSOLE_CURSOR_INFO lpConsoleCursorInfo);
-
+        
         [DllImport("kernel32.dll", SetLastError = true)]
         public static extern bool ReadConsoleInput(IntPtr hConsoleInput, [Out] INPUT_RECORD[] lpBuffer, uint nLength, ref uint lpNumberOfEventsRead);
-
+        
         [DllImport("user32.dll")]
         public static extern short GetAsyncKeyState(int vKey);
     }
@@ -96,30 +89,33 @@ namespace Native {
 "@
 
 try {
-    # Compile the single block
-    Add-Type -TypeDefinition $CSharpCode -Language CSharp -IgnoreWarnings -ErrorAction Stop
+    Add-Type -TypeDefinition $AllCSharp -Language CSharp -IgnoreWarnings -ErrorAction Stop
 } catch {
     Write-Host "CRITICAL ERROR: Failed to compile Win32 Types." -ForegroundColor Red
     Write-Host "Error Details: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host "Context: The C# struct definition has a syntax error or missing references." -ForegroundColor Yellow
     if (-not $Debug) { Read-Host "Press Enter to exit" }
     exit 1
 }
 
-# Setup Handles and Modes
+# Constants
 $STD_INPUT = [Native.Win32]::GetStdHandle(-10)
 $STD_OUTPUT = [Native.Win32]::GetStdHandle(-11)
+$ENABLE_MOUSE = 0x0010
+$ENABLE_EXTENDED = 0x0080
+$ENABLE_VT_INPUT = 0x0200
+$ENABLE_VT_PROCESS = 0x0004
 
+# Setup Console Mode
 $OriginalInputMode = 0
 [Native.Win32]::GetConsoleMode($STD_INPUT, [ref]$OriginalInputMode)
-[Native.Win32]::SetConsoleMode($STD_INPUT, ($OriginalInputMode -bor 0x0010 -bor 0x0080 -bor 0x0200)) # Mouse + Extended + VT Input
+[Native.Win32]::SetConsoleMode($STD_INPUT, ($OriginalInputMode -bor $ENABLE_MOUSE -bor $ENABLE_EXTENDED -bor $ENABLE_VT_INPUT))
 
 $OriginalOutputMode = 0
 [Native.Win32]::GetConsoleMode($STD_OUTPUT, [ref]$OriginalOutputMode)
-[Native.Win32]::SetConsoleMode($STD_OUTPUT, ($OriginalOutputMode -bor 0x0004)) # VT Processing
+[Native.Win32]::SetConsoleMode($STD_OUTPUT, ($OriginalOutputMode -bor $ENABLE_VT_PROCESS))
 
 # Hide Cursor
-$CursorInfo = New-Object Native.CONSOLE_CURSOR_INFO
+$CursorInfo = New-Object Native.Win32+CONSOLE_CURSOR_INFO
 $CursorInfo.dwSize = 1
 $CursorInfo.bVisible = $false
 [Native.Win32]::SetConsoleCursorInfo($STD_OUTPUT, [ref]$CursorInfo)
@@ -140,7 +136,7 @@ $MapWidth = 40
 $MapHeight = 40
 $MaxFloors = 5
 $FOV = [Math]::PI / 3.0
-$Resolution = 2 
+$Resolution = 2
 
 # Keys
 $VK_W = 0x57; $VK_S = 0x53; $VK_A = 0x41; $VK_D = 0x44
@@ -148,16 +144,17 @@ $VK_Q = 0x51; $VK_E = 0x45; $VK_SPACE = 0x20
 $VK_PGUP = 0x21; $VK_PGDN = 0x22; $VK_ESC = 0x1B
 
 # ==============================================================================
-# 2. PROCEDURAL MAP GENERATION
+# 2. PROCEDURAL MAP GENERATION (Fixed Indexing)
 # ==============================================================================
 function Initialize-Map {
+    # Create 3D Array: [x, y, z]
     $global:Map = New-Object 'int[,,]' ($MapWidth, $MapHeight, $MaxFloors)
     
     for ($z = 0; $z -lt $MaxFloors; $z++) {
         # Noise
         for ($x = 0; $x -lt $MapWidth; $x++) {
             for ($y = 0; $y -lt $MapHeight; $y++) {
-                if ($x -eq 0 -or $x -eq $MapWidth-1 -or $y -eq 0 -or $y -eq $MapHeight-1) {
+                if ($x -eq 0 -or $x -eq ($MapWidth-1) -or $y -eq 0 -or $y -eq ($MapHeight-1)) {
                     $global:Map[$x,$y,$z] = 1
                 } else {
                     if ((Get-Random) % 10 -lt 4) {
@@ -172,13 +169,20 @@ function Initialize-Map {
         # Cellular Automata Smoothing
         for ($i = 0; $i -lt 4; $i++) {
             $newMap = $global:Map.Clone()
-            for ($x = 1; $x -lt $MapWidth-1; $x++) {
-                for ($y = 1; $y -lt $MapHeight-1; $y++) {
+            for ($x = 1; $x -lt ($MapWidth-1); $x++) {
+                for ($y = 1; $y -lt ($MapHeight-1); $y++) {
                     $neighbors = 0
                     for ($dx = -1; $dx -le 1; $dx++) {
                         for ($dy = -1; $dy -le 1; $dy++) {
                             if ($dx -eq 0 -and $dy -eq 0) { continue }
-                            if ($global:Map[$x+$dx, $y+$dy, $z] -eq 1) { $neighbors++ }
+                            
+                            # FIX: Pre-calculate indices to avoid op_Addition error
+                            $nx = $x + $dx
+                            $ny = $y + $dy
+                            
+                            if ($global:Map[$nx, $ny, $z] -eq 1) { 
+                                $neighbors++ 
+                            }
                         }
                     }
                     if ($neighbors -gt 4) { $newMap[$x,$y,$z] = 1 }
@@ -194,7 +198,7 @@ function Initialize-Map {
                 for ($dy = -2; $dy -le 2; $dy++) {
                     $gx = 20 + $dx
                     $gy = 20 + $dy
-                    if ($gx -gt 0 -and $gx -lt $MapWidth-1 -and $gy -gt 0 -and $gy -lt $MapHeight-1) {
+                    if ($gx -gt 0 -and $gx -lt ($MapWidth-1) -and $gy -gt 0 -and $gy -lt ($MapHeight-1)) {
                         $global:Map[$gx, $gy, 0] = 0
                     }
                 }
@@ -202,7 +206,7 @@ function Initialize-Map {
         }
 
         # Place Stairs
-        if ($z -lt $MaxFloors - 1) {
+        if ($z -lt ($MaxFloors - 1)) {
             $found = $false
             $attempts = 0
             while (-not $found -and $attempts -lt 100) {
@@ -223,13 +227,13 @@ function Initialize-Map {
 }
 
 # ==============================================================================
-# 3. ENEMY AI CLASS (A* Pathfinding)
+# 3. ENEMY AI CLASS (Fixed Scoping)
 # ==============================================================================
 class Enemy {
     [float]$X
     [float]$Y
     [int]$Z
-    [int]$State 
+    [int]$State
     [float]$Health
     [System.Collections.Generic.List[string]]$Path
     [int]$LastPathFrame
@@ -265,6 +269,7 @@ class Enemy {
             $mx = [int]$cx
             $my = [int]$cy
             
+            # FIX: Explicit bounds check and index calculation
             if ($mx -ge 0 -and $mx -lt $global:MapWidth -and $my -ge 0 -and $my -lt $global:MapHeight) {
                 if ($global:Map[$mx, $my, $this.Z] -gt 0 -and $global:Map[$mx, $my, $this.Z] -lt 2) {
                     return $false
@@ -326,6 +331,7 @@ class Enemy {
             $ix = [int]$nx
             $iy = [int]$ny
             
+            # FIX: Explicit bounds check
             if ($ix -ge 0 -and $ix -lt $global:MapWidth -and $iy -ge 0 -and $iy -lt $global:MapHeight) {
                 if ($global:Map[$ix, $iy, $this.Z] -eq 0 -or $global:Map[$ix, $iy, $this.Z] -ge 2) {
                     $this.X = $nx
@@ -358,7 +364,7 @@ class Enemy {
             $currentKey = $null
             $lowestF = 999999
             foreach ($k in $openSet) {
-                if ($fScore[$k] -lt $lowestF) {
+                if ($fScore.ContainsKey($k) -and $fScore[$k] -lt $lowestF) {
                     $lowestF = $fScore[$k]
                     $currentKey = $k
                 }
@@ -382,6 +388,7 @@ class Enemy {
                 $nx = [int]$np[0]
                 $ny = [int]$np[1]
                 
+                # FIX: Explicit bounds check using global variables
                 if ($nx -lt 0 -or $nx -ge $global:MapWidth -or $ny -lt 0 -or $ny -ge $global:MapHeight) { continue }
                 if ($global:Map[$nx, $ny, $this.Z] -gt 0 -and $global:Map[$nx, $ny, $this.Z] -lt 2) { continue }
                 
@@ -469,7 +476,7 @@ function Shoot {
 }
 
 function Handle-Input {
-    $events = New-Object Native.INPUT_RECORD[] 16
+    $events = New-Object Native.Win32+INPUT_RECORD[] 16
     $numRead = 0
     [Native.Win32]::ReadConsoleInput($STD_INPUT, $events, 16, [ref]$numRead) | Out-Null
     
@@ -584,7 +591,7 @@ function Handle-Input {
     $tile = $global:Map[$cx, $cy, $iz]
     
     if ($tile -eq 2) { 
-        if ($iz -lt $MaxFloors - 1) {
+        if ($iz -lt ($MaxFloors - 1)) {
             $Global:GameState.PlayerZ++
             $Global:GameState.PlayerX = $cx + 0.5
             $Global:GameState.PlayerY = $cy + 0.5
@@ -592,7 +599,7 @@ function Handle-Input {
     }
     
     if ([bool]([Native.Win32]::GetAsyncKeyState($VK_PGUP) -lt 0)) {
-         if ($Global:GameState.PlayerZ -lt $MaxFloors - 1) { $Global:GameState.PlayerZ++ }
+         if ($Global:GameState.PlayerZ -lt ($MaxFloors - 1)) { $Global:GameState.PlayerZ++ }
     }
     if ([bool]([Native.Win32]::GetAsyncKeyState($VK_PGDN) -lt 0)) {
         if ($Global:GameState.PlayerZ -gt 0) { $Global:GameState.PlayerZ-- }
@@ -610,7 +617,7 @@ function Render-Frame {
     
     for ($x = 0; $x -lt $Width; $x++) {
         for ($y = 0; $y -lt $Height; $y++) {
-            if ($y -lt $Height / 2) { 
+            if ($y -lt ($Height / 2)) { 
                 $screen[$x,$y] = ' '
                 $colors[$x,$y] = '40;94'
             } else { 
@@ -680,7 +687,7 @@ function Render-Frame {
                 $colors[$x, $y] = "40;${cVal}"
                 if ($Resolution -gt 1) {
                     for ($k = 1; $k -lt $Resolution; $k++) {
-                        if ($x+$k -lt $Width) {
+                        if (($x+$k) -lt $Width) {
                             $screen[$x+$k, $y] = $bChar
                             $colors[$x+$k, $y] = "40;${cVal}"
                         }
