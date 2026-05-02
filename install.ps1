@@ -1,82 +1,59 @@
-param([switch]$ForceUpdate)
-
+# install.ps1 - Auto-Updating Installer using Commit Hashes
+$InstallDir = "$env:USERPROFILE\NilGame"
 $RepoOwner = "johnesecat"
 $RepoName = "nil"
-$InstallDir = "$env:USERPROFILE\NilGame"
-$Files = @("DoomEngine.ps1", "Play.ps1")
+$Branch = "main"
 
 Write-Host "=== Nil Game Installer ===" -ForegroundColor Cyan
 
 # Create Directory
 if (-not (Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Path $InstallDir | Out-Null
-    Write-Host "Created installation directory: $InstallDir" -ForegroundColor Green
 }
+Set-Location $InstallDir
 
-# Helper: Get Local Commit Hash (from a marker file we create)
-$HashFile = Join-Path $InstallDir ".commit_hash"
-$LocalHash = ""
-if (Test-Path $HashFile) {
-    $LocalHash = Get-Content $HashFile -ErrorAction SilentlyContinue
-}
-
-# Helper: Get Remote Commit Hash via API
+# Fetch Latest Commit Hash from GitHub API
 try {
-    $apiUrl = "https://api.github.com/repos/$RepoOwner/$RepoName/commits/main"
-    $response = Invoke-RestMethod -Uri $apiUrl -UseBasicParsing -ErrorAction Stop
-    $RemoteHash = $response.sha
-    Write-Host "Latest Commit: $RemoteHash" -ForegroundColor Gray
+    $apiUrl = "https://api.github.com/repos/$RepoOwner/$RepoName/commits?sha=$Branch&per_page=1"
+    $response = Invoke-RestMethod -Uri $apiUrl -UseBasicParsing
+    $latestCommit = $response[0].sha
+    Write-Host "Latest Commit: $latestCommit" -ForegroundColor Green
 } catch {
-    Write-Host "Failed to fetch remote commit info. Check internet connection." -ForegroundColor Red
-    Write-Host $_.Exception.Message
-    exit 1
+    Write-Host "Failed to fetch commit info. Using fallback." -ForegroundColor Yellow
+    $latestCommit = "unknown"
 }
 
-# Compare
-if ($LocalHash -eq $RemoteHash -and -not $ForceUpdate) {
-    Write-Host "Up to date! (Commit: $LocalHash)" -ForegroundColor Green
-    # Verify files exist just in case
-    $missing = $Files | Where-Object { -not (Test-Path (Join-Path $InstallDir $_)) }
-    if ($missing) {
-        Write-Host "Some files missing. Re-installing..." -ForegroundColor Yellow
-    } else {
-        exit 0
-    }
+# Check Local Commit Hash
+$localCommitFile = Join-Path $InstallDir ".commit_hash"
+$localCommit = ""
+if (Test-Path $localCommitFile) {
+    $localCommit = Get-Content $localCommitFile -Raw
+}
+
+# Compare and Update
+if ($localCommit -eq $latestCommit -and $latestCommit -ne "unknown") {
+    Write-Host "Already up to date ($latestCommit)." -ForegroundColor Gray
 } else {
-    if ($LocalHash) {
-        Write-Host "Update Available! Updating from $LocalHash to $RemoteHash" -ForegroundColor Yellow
-    } else {
-        Write-Host "Installing new version ($RemoteHash)..." -ForegroundColor Yellow
+    Write-Host "Update Available! Updating from $localCommit to $latestCommit" -ForegroundColor Yellow
+    
+    # Download Files
+    $files = @("DoomEngine.ps1", "Play.ps1")
+    foreach ($file in $files) {
+        try {
+            $url = "https://raw.githubusercontent.com/$RepoOwner/$RepoName/$Branch/$file"
+            Write-Host "Downloading $file..." -NoNewline
+            Invoke-WebRequest -Uri $url -OutFile (Join-Path $InstallDir $file) -UseBasicParsing
+            Write-Host " Done" -ForegroundColor Green
+        } catch {
+            Write-Host " Failed" -ForegroundColor Red
+        }
     }
+    
+    # Save Commit Hash
+    $latestCommit | Set-Content $localCommitFile
+    Write-Host "Installation Complete!" -ForegroundColor Cyan
 }
 
-# Download Files
-foreach ($file in $Files) {
-    $url = "https://raw.githubusercontent.com/$RepoOwner/$RepoName/main/$file"
-    $dest = Join-Path $InstallDir $file
-    Write-Host "Downloading $file..." -NoNewline
-    try {
-        Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -ErrorAction Stop
-        Write-Host " Done" -ForegroundColor Green
-    } catch {
-        Write-Host " Failed" -ForegroundColor Red
-        Write-Host "Error downloading $file : $($_.Exception.Message)"
-    }
-}
-
-# Save Commit Hash
-$RemoteHash | Set-Content $HashFile -Encoding ASCII
-
-# Create Play.ps1 if it wasn't in the repo download (fallback)
-$PlayPath = Join-Path $InstallDir "Play.ps1"
-if (-not (Test-Path $PlayPath)) {
-    @"
-# Launcher for Nil Game
-& "$PSScriptRoot\DoomEngine.ps1" -Debug
-"@ | Set-Content $PlayPath
-}
-
-Write-Host "`nInstallation Complete!" -ForegroundColor Green
-Write-Host "Run the game with: .\Play.ps1" -ForegroundColor Cyan
-Write-Host "Or directly: $InstallDir\DoomEngine.ps1"
-Write-Host "Tip: Add -Debug flag to see errors if it crashes."
+Write-Host "Run the game with: .\Play.ps1" -ForegroundColor White
+Write-Host "Or directly: $InstallDir\DoomEngine.ps1" -ForegroundColor Gray
+Write-Host "Tip: Add -Debug flag to see errors if it crashes." -ForegroundColor DarkGray
