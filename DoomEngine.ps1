@@ -5,13 +5,13 @@
     A fully functional Wolfenstein 3D-style engine running natively in Windows Terminal.
     Features: DDA Raycasting, A* Pathfinding, Line of Sight, Multi-floor Procedural Generation, Win32 Input.
 .PARAMETER Debug
-    Keeps the console open on crash to show errors.
+    Keeps the window open on crash to show errors.
 .PARAMETER Width
-    Console buffer width.
+    Console width (default: 100).
 .PARAMETER Height
-    Console buffer height.
+    Console height (default: 50).
 .PARAMETER Resolution
-    Render quality (1=High CPU, 2=Balanced, 4=Fast).
+    Render quality (1=High, 2=Med, 4=Fast).
 #>
 
 param(
@@ -24,9 +24,12 @@ param(
 # ==============================================================================
 # 1. WIN32 API P/INVOKES (Direct Console & Input Control)
 # ==============================================================================
-# FIX: Removed 'using' statements and namespace declarations from MemberDefinition.
-# Add-Type automatically imports standard namespaces. We only define the structs/classes.
-$TypeDefs = @'
+
+# Define Structs First
+$StructDefinition = @"
+using System;
+using System.Runtime.InteropServices;
+
 [StructLayout(LayoutKind.Explicit)]
 public struct INPUT_RECORD {
     [FieldOffset(0)] public ushort EventType;
@@ -68,12 +71,20 @@ public const int ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
 public const int ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
 public const int KEY_EVENT = 0x0001;
 public const int MOUSE_EVENT = 0x0002;
-'@
+"@
 
 try {
-    $InputTypes = Add-Type -MemberDefinition $TypeDefs -Name 'InputTypes' -Namespace Native -PassThru -ErrorAction Stop
-    
-    $Kernel32 = Add-Type -MemberDefinition @'
+    $InputTypes = Add-Type -MemberDefinition $StructDefinition -Name 'InputTypes' -Namespace 'Native' -PassThru
+} catch {
+    Write-Host "CRITICAL ERROR: Failed to load Win32 Types." -ForegroundColor Red
+    Write-Host "Error Details: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "Ensure you are running Windows PowerShell or PowerShell 7+ on Windows." -ForegroundColor Yellow
+    if (-not $Debug) { Read-Host "Press Enter to exit" }
+    exit 1
+}
+
+# Define Win32 Methods
+$Win32Definition = @"
 [DllImport("kernel32.dll", SetLastError = true)]
 public static extern IntPtr GetStdHandle(int nStdHandle);
 [DllImport("kernel32.dll", SetLastError = true)]
@@ -83,17 +94,18 @@ public static extern bool SetConsoleMode(IntPtr hConsoleOutput, uint dwMode);
 [DllImport("kernel32.dll", SetLastError = true)]
 public static extern bool SetConsoleCursorPosition(IntPtr hConsoleOutput, int dwCursorPosition);
 [DllImport("kernel32.dll", SetLastError = true)]
-public static extern bool SetConsoleCursorInfo(IntPtr hConsoleOutput, ref CONSOLE_CURSOR_INFO lpConsoleCursorInfo);
+public static extern bool SetConsoleCursorInfo(IntPtr hConsoleOutput, ref Native.InputTypes+CONSOLE_CURSOR_INFO lpConsoleCursorInfo);
 [DllImport("kernel32.dll", SetLastError = true)]
-public static extern bool ReadConsoleInput(IntPtr hConsoleInput, [Out] INPUT_RECORD[] lpBuffer, uint nLength, ref uint lpNumberOfEventsRead);
+public static extern bool ReadConsoleInput(IntPtr hConsoleInput, [Out] Native.InputTypes+INPUT_RECORD[] lpBuffer, uint nLength, ref uint lpNumberOfEventsRead);
 [DllImport("user32.dll")]
 public static extern short GetAsyncKeyState(int vKey);
-'@ -Name 'Win32' -Namespace Native -PassThru -UsingType $InputTypes -ErrorAction Stop
+"@
 
+try {
+    $Kernel32 = Add-Type -MemberDefinition $Win32Definition -Name 'Win32' -Namespace 'Native' -PassThru
 } catch {
-    Write-Host "CRITICAL ERROR: Failed to load Win32 Types." -ForegroundColor Red
+    Write-Host "CRITICAL ERROR: Failed to load Kernel32 Methods." -ForegroundColor Red
     Write-Host "Error Details: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host "Ensure you are running Windows PowerShell or PowerShell 7+ on Windows." -ForegroundColor Yellow
     if (-not $Debug) { Read-Host "Press Enter to exit" }
     exit 1
 }
@@ -108,13 +120,13 @@ $ENABLE_VT_INPUT = 0x0200
 $ENABLE_VT_PROCESS = 0x0004
 
 # Setup Console Mode
-$origInputMode = 0
-[Native.Win32]::GetConsoleMode($STD_INPUT, [ref]$origInputMode)
-[Native.Win32]::SetConsoleMode($STD_INPUT, ($origInputMode -bor $ENABLE_MOUSE -bor $ENABLE_EXTENDED -bor $ENABLE_WINDOW -bor $ENABLE_VT_INPUT))
+$modeIn = 0
+[Native.Win32]::GetConsoleMode($STD_INPUT, [ref]$modeIn)
+[Native.Win32]::SetConsoleMode($STD_INPUT, ($modeIn -bor $ENABLE_MOUSE -bor $ENABLE_EXTENDED -bor $ENABLE_WINDOW -bor $ENABLE_VT_INPUT))
 
-$origOutputMode = 0
-[Native.Win32]::GetConsoleMode($STD_OUTPUT, [ref]$origOutputMode)
-[Native.Win32]::SetConsoleMode($STD_OUTPUT, ($origOutputMode -bor $ENABLE_VT_PROCESS))
+$modeOut = 0
+[Native.Win32]::GetConsoleMode($STD_OUTPUT, [ref]$modeOut)
+[Native.Win32]::SetConsoleMode($STD_OUTPUT, ($modeOut -bor $ENABLE_VT_PROCESS))
 
 # Hide Cursor
 $cursorInfo = New-Object Native.InputTypes+CONSOLE_CURSOR_INFO
@@ -128,7 +140,7 @@ try {
     $Host.UI.RawUI.WindowSize = New-Object System.Management.Automation.Host.Size($Width, $Height)
     $Host.UI.RawUI.CursorPosition = New-Object System.Management.Automation.Host.Coordinates(0,0)
 } catch {
-    # Ignore resize errors in some hosts
+    # Ignore if raw UI access fails
 }
 
 # ==============================================================================
@@ -137,49 +149,35 @@ try {
 $MapWidth = 40
 $MapHeight = 40
 $MaxFloors = 5
+$ViewDistance = 20.0
 $FOV = [Math]::PI / 3.0
+
+# Unicode Blocks
+$Blocks = @(' ', [char]9617, [char]9618, [char]9619, [char]9608) 
 
 # Keys
 $VK_W = 0x57; $VK_S = 0x53; $VK_A = 0x41; $VK_D = 0x44
 $VK_Q = 0x51; $VK_E = 0x45; $VK_SPACE = 0x20
+$VK_UP = 0x26; $VK_DOWN = 0x28; $VK_LEFT = 0x25; $VK_RIGHT = 0x27
 $VK_PGUP = 0x21; $VK_PGDN = 0x22; $VK_ESC = 0x1B
 $VK_LBUTTON = 0x01
 
-# Global State
-$Global:GameState = @{
-    PlayerX = 20.5
-    PlayerY = 20.5
-    PlayerZ = 0
-    DirX = -1.0
-    DirY = 0.0
-    PlaneX = 0.0
-    PlaneY = 0.66
-    Health = 100
-    Score = 0
-    Running = $true
-    Frame = 0
-    WeaponAnim = 0
-    LastMouseX = -1
-    LastMouseY = -1
-}
-
-$Global:Map = $null
-$Global:Enemies = New-Object System.Collections.Generic.List[Object] # Will hold Enemy objects
-
 # ==============================================================================
-# 3. PROCEDURAL MAP GENERATION
+# 3. PROCEDURAL MAP GENERATION (Cellular Automata + Stair Connection)
 # ==============================================================================
 function Initialize-Map {
     $global:Map = New-Object 'int[,,]' ($MapWidth, $MapHeight, $MaxFloors)
+    $global:Visited = New-Object 'bool[,,]' ($MapWidth, $MapHeight, $MaxFloors)
     
     for ($z = 0; $z -lt $MaxFloors; $z++) {
-        # Random Noise
+        # Step 1: Random Noise
         for ($x = 0; $x -lt $MapWidth; $x++) {
             for ($y = 0; $y -lt $MapHeight; $y++) {
                 if ($x -eq 0 -or $x -eq $MapWidth-1 -or $y -eq 0 -or $y -eq $MapHeight-1) {
                     $global:Map[$x,$y,$z] = 1
                 } else {
-                    if ((Get-Random) % 10 -lt 4) {
+                    $rand = Get-Random
+                    if ($rand % 10 -lt 4) {
                         $global:Map[$x,$y,$z] = 1
                     } else {
                         $global:Map[$x,$y,$z] = 0
@@ -188,7 +186,7 @@ function Initialize-Map {
             }
         }
 
-        # Cellular Automata Smoothing
+        # Step 2: Cellular Automata Smoothing
         for ($i = 0; $i -lt 4; $i++) {
             $newMap = $global:Map.Clone()
             for ($x = 1; $x -lt $MapWidth-1; $x++) {
@@ -207,7 +205,7 @@ function Initialize-Map {
             $global:Map = $newMap
         }
 
-        # Clear Start Area
+        # Step 3: Ensure Player Start is Clear
         if ($z -eq 0) {
             for ($dx = -2; $dx -le 2; $dx++) {
                 for ($dy = -2; $dy -le 2; $dy++) {
@@ -220,7 +218,7 @@ function Initialize-Map {
             }
         }
 
-        # Place Stairs
+        # Step 4: Place Stairs
         if ($z -lt $MaxFloors - 1) {
             $found = $false
             $attempts = 0
@@ -230,7 +228,7 @@ function Initialize-Map {
                 $sy = (Get-Random) % ($MapHeight - 4) + 2
                 if ($global:Map[$sx, $sy, $z] -eq 0) {
                     $global:Map[$sx, $sy, $z] = 2 # Stair Up
-                    $global:Map[$sx, $sy, $z+1] = 0
+                    $global:Map[$sx, $sy, $z+1] = 0 # Clear landing above
                     $global:Map[$sx+1, $sy, $z+1] = 0
                     $global:Map[$sx, $sy+1, $z+1] = 0
                     $global:Map[$sx+1, $sy+1, $z+1] = 0
@@ -242,13 +240,13 @@ function Initialize-Map {
 }
 
 # ==============================================================================
-# 4. ENEMY AI CLASS
+# 4. ADVANCED ENEMY AI (A* Pathfinding + Line of Sight)
 # ==============================================================================
 class Enemy {
     [float]$X
     [float]$Y
     [int]$Z
-    [int]$State
+    [int]$State # 0: Idle, 1: Alert, 2: Chase, 3: Attack
     [float]$Health
     [System.Collections.Generic.List[string]]$Path
     [int]$LastPathFrame
@@ -376,7 +374,7 @@ class Enemy {
             $currentKey = $null
             $lowestF = 999999
             foreach ($k in $openSet) {
-                if ($fScore.ContainsKey($k) -and $fScore[$k] -lt $lowestF) {
+                if ($fScore[$k] -lt $lowestF) {
                     $lowestF = $fScore[$k]
                     $currentKey = $k
                 }
@@ -429,6 +427,32 @@ class Enemy {
     }
 }
 
+# ==============================================================================
+# 5. GAME STATE & INPUT HANDLING
+# ==============================================================================
+$Global:GameState = @{
+    PlayerX = 20.5
+    PlayerY = 20.5
+    PlayerZ = 0
+    DirX = -1.0
+    DirY = 0.0
+    PlaneX = 0.0
+    PlaneY = 0.66
+    Health = 100
+    Score = 0
+    Running = $true
+    LastTime = [DateTime]::Now.Ticks
+    Frame = 0
+    WeaponAnim = 0
+    Shooting = $false
+    MouseDX = 0
+    MouseDY = 0
+    LastMouseX = -1
+    LastMouseY = -1
+}
+
+$Global:Enemies = New-Object System.Collections.Generic.List[Enemy]
+
 function Spawn-Enemies {
     for ($i = 0; $i -lt 10; $i++) {
         $ex = (Get-Random) % ($MapWidth - 2) + 1
@@ -442,9 +466,6 @@ function Spawn-Enemies {
     }
 }
 
-# ==============================================================================
-# 5. INPUT HANDLING
-# ==============================================================================
 function Shoot {
     $Global:GameState.Shooting = $true
     $Global:GameState.WeaponAnim = 5
@@ -497,8 +518,8 @@ function Handle-Input {
                     $Global:GameState.PlaneX = ($Global:GameState.PlaneX * [Math]::Cos(-0.1)) - ($Global:GameState.PlaneY * [Math]::Sin(-0.1))
                     $Global:GameState.PlaneY = ($oldPlaneX * [Math]::Sin(-0.1)) + ($Global:GameState.PlaneY * [Math]::Cos(-0.1))
                 }
-                if ($key -eq $VK_SPACE) { 
-                    Shoot 
+                if ($key -eq $VK_SPACE) {
+                    Shoot
                 }
                 if ($key -eq $VK_ESC) {
                     $Global:GameState.Running = $false
@@ -511,9 +532,9 @@ function Handle-Input {
             $my = $ev.MouseEvent.dwMousePosition_Y
             
             if ($Global:GameState.LastMouseX -ne -1) {
-                $delta = $mx - $Global:GameState.LastMouseX
-                if ($delta -ne 0) {
-                    $angle = $delta * 0.05
+                $dx = $mx - $Global:GameState.LastMouseX
+                if ($dx -ne 0) {
+                    $angle = $dx * 0.05
                     $oldDirX = $Global:GameState.DirX
                     $Global:GameState.DirX = ($Global:GameState.DirX * [Math]::Cos($angle)) - ($Global:GameState.DirY * [Math]::Sin($angle))
                     $Global:GameState.DirY = ($oldDirX * [Math]::Sin($angle)) + ($Global:GameState.DirY * [Math]::Cos($angle))
@@ -525,14 +546,12 @@ function Handle-Input {
             $Global:GameState.LastMouseX = $mx
             $Global:GameState.LastMouseY = $my
             
-            # Left Click Shoot
-            if ($ev.MouseEvent.dwButtonState -band 0x01) {
-                Shoot
+            if ($ev.MouseEvent.dwButtonState -band 1) {
+                 Shoot
             }
         }
     }
     
-    # Continuous Movement
     $moveSpeed = 0.15
     $strafeSpeed = 0.12
     
@@ -579,7 +598,6 @@ function Handle-Input {
         }
     }
     
-    # Seamless Stairs
     $cx = [int]$Global:GameState.PlayerX
     $cy = [int]$Global:GameState.PlayerY
     $tile = $global:Map[$cx, $cy, $iz]
@@ -601,7 +619,7 @@ function Handle-Input {
 }
 
 # ==============================================================================
-# 6. RAYCASTING ENGINE
+# 6. RAYCASTING ENGINE (DDA Algorithm)
 # ==============================================================================
 function Render-Frame {
     $Global:GameState.Frame++
@@ -738,6 +756,8 @@ function Render-Frame {
     # Draw Weapon
     $wAnim = $Global:GameState.WeaponAnim
     if ($wAnim -gt 0) { $Global:GameState.WeaponAnim-- }
+    $weaponY = $Height - 10 + $wAnim
+    $weaponX = ($Width / 2) - 2
     
     # Output Buffer
     $output = New-Object System.Text.StringBuilder
@@ -753,7 +773,7 @@ function Render-Frame {
     }
     
     # HUD
-    $hud = "Health: $($Global:GameState.Health) | Score: $($Global:GameState.Score) | Floor: $($Global:GameState.PlayerZ + 1) | WASD=Move QE=Turn Space/Click=Fire PGUP/DN=Floors ESC=Quit"
+    $hud = "Health: $($Global:GameState.Health) | Score: $($Global:GameState.Score) | Floor: $($Global:GameState.PlayerZ + 1) | WASD=Move QE=Turn Space=Fire PGUP/DN=Floors ESC=Quit"
     $output.Append("`e[7m${hud}`e[0m")
     
     [Console]::SetCursorPosition(0, 0)
@@ -768,6 +788,10 @@ Spawn-Enemies
 
 try {
     while ($Global:GameState.Running) {
+        $now = [DateTime]::Now.Ticks
+        $dt = ($now - $Global:GameState.LastTime) / 10000000.0
+        $Global:GameState.LastTime = $now
+        
         Handle-Input
         
         foreach ($en in $Global:Enemies.ToArray()) {
@@ -786,20 +810,16 @@ try {
         
         Start-Sleep -Milliseconds 10
     }
-} catch {
-    Write-Host "FATAL ERROR: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host $_.ScriptStackTrace -ForegroundColor Gray
-    if (-not $Debug) { Read-Host "Press Enter to exit" }
-    exit 1
 } finally {
-    # Reset Console
-    [Native.Win32]::SetConsoleMode($STD_INPUT, $origInputMode)
-    [Native.Win32]::SetConsoleMode($STD_OUTPUT, $origOutputMode)
+    $modeInReset = 0
+    [Native.Win32]::GetConsoleMode($STD_INPUT, [ref]$modeInReset)
+    [Native.Win32]::SetConsoleMode($STD_INPUT, ($modeInReset -bxor $ENABLE_VT_INPUT))
     
     $cursorInfo.bVisible = $true
     [Native.Win32]::SetConsoleCursorInfo($STD_OUTPUT, [ref]$cursorInfo)
     [Console]::Clear()
     Write-Host "Game Over! Final Score: $($Global:GameState.Score)" -ForegroundColor Cyan
+    if (-not $Debug) {
+        Read-Host "Press Enter to exit"
+    }
 }
-
-if (-not $Debug) { Read-Host "Press Enter to exit" }
