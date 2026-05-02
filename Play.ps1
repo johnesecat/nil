@@ -1,12 +1,18 @@
-# Play.ps1
-# Launcher script that enables Debug mode by default to catch crashes
+# Play.ps1 - Launcher with Debug Mode
+param(
+    [switch]$Debug
+)
 
-$ScriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
-$EnginePath = Join-Path $ScriptPath "DoomEngine.ps1"
+$scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
+$enginePath = Join-Path $scriptPath "DoomEngine.ps1"
 
-if (Test-Path $EnginePath) {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $EnginePath -Debug
+if (Test-Path $enginePath) {
+    if ($Debug) {
+        & $enginePath -Debug
+    } else {
+        & $enginePath
+    }
 } else {
-    Write-Host "Error: DoomEngine.ps1 not found in $ScriptPath" -ForegroundColor Red
-    Read-Host "Press Enter to exit"
+    Write-Host "Error: DoomEngine.ps1 not found in $scriptPath" -ForegroundColor Red
+    Start-Sleep -Seconds 3
 }
