@@ -1,145 +1,82 @@
-<#
-.SYNOPSIS
-    Nil Game Engine Installer with Auto-Versioning
-.DESCRIPTION
-    Downloads and installs the latest version of the Doom-style Raycasting Engine.
-    Automatically detects updates by comparing file hashes and GitHub metadata.
-#>
+param([switch]$ForceUpdate)
 
-$InstallDir = "$env:USERPROFILE\NilGame"
-$RepoUser = "johnesecat"
+$RepoOwner = "johnesecat"
 $RepoName = "nil"
-$Branch = "main"
+$InstallDir = "$env:USERPROFILE\NilGame"
+$Files = @("DoomEngine.ps1", "Play.ps1")
 
-# Files to manage
-$Files = @(
-    @{ Name = "DoomEngine.ps1"; Path = "$InstallDir\DoomEngine.ps1" },
-    @{ Name = "Play.ps1"; Path = "$InstallDir\Play.ps1" },
-    @{ Name = "version.txt"; Path = "$InstallDir\version.txt" }
-)
+Write-Host "=== Nil Game Installer ===" -ForegroundColor Cyan
 
-function Get-GitHubFileMeta {
-    param($fileName)
-    try {
-        $url = "https://api.github.com/repos/$RepoUser/$RepoName/contents/$fileName?ref=$Branch"
-        $meta = Invoke-RestMethod -Uri $url -UseBasicParsing -ErrorAction Stop
-        return $meta
-    } catch {
-        Write-Host "Failed to fetch metadata for $fileName : $_" -ForegroundColor Red
-        return $null
-    }
+# Create Directory
+if (-not (Test-Path $InstallDir)) {
+    New-Item -ItemType Directory -Path $InstallDir | Out-Null
+    Write-Host "Created installation directory: $InstallDir" -ForegroundColor Green
 }
 
-function Get-FileHashLocal {
-    param($path)
-    if (Test-Path $path) {
-        $hash = Get-FileHash -Path $path -Algorithm SHA256
-        return $hash.Hash
-    }
-    return $null
+# Helper: Get Local Commit Hash (from a marker file we create)
+$HashFile = Join-Path $InstallDir ".commit_hash"
+$LocalHash = ""
+if (Test-Path $HashFile) {
+    $LocalHash = Get-Content $HashFile -ErrorAction SilentlyContinue
 }
 
-function Test-UpdateAvailable {
-    $updateNeeded = $false
-    $reasons = @()
-
-    foreach ($file in $Files) {
-        $meta = Get-GitHubFileMeta -fileName $file.Name
-        if (-not $meta) { continue }
-
-        $localHash = Get-FileHashLocal -path $file.Path
-        $remoteHash = $meta.sha # GitHub API returns content hash in 'sha' field for files
-
-        if ($localHash -ne $remoteHash) {
-            $updateNeeded = $true
-            $reasons += "$($file.Name) changed"
-        }
-    }
-
-    # Check version.txt logic as fallback
-    $versionPath = "$InstallDir\version.txt"
-    $currentVer = "v0.0.0"
-    if (Test-Path $versionPath) {
-        $currentVer = Get-Content $versionPath -ErrorAction SilentlyContinue
-    }
-    
-    # Try to infer version from remote version.txt content if available
-    $verMeta = Get-GitHubFileMeta -fileName "version.txt"
-    if ($verMeta) {
-        $remoteContent = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($verMeta.content))
-        $remoteVer = $remoteContent.Trim()
-        if ($currentVer -ne $remoteVer) {
-            $updateNeeded = $true
-            $reasons += "Version mismatch ($currentVer vs $remoteVer)"
-        }
-    }
-
-    return @{ Needed = $updateNeeded; Reasons = $reasons }
+# Helper: Get Remote Commit Hash via API
+try {
+    $apiUrl = "https://api.github.com/repos/$RepoOwner/$RepoName/commits/main"
+    $response = Invoke-RestMethod -Uri $apiUrl -UseBasicParsing -ErrorAction Stop
+    $RemoteHash = $response.sha
+    Write-Host "Latest Commit: $RemoteHash" -ForegroundColor Gray
+} catch {
+    Write-Host "Failed to fetch remote commit info. Check internet connection." -ForegroundColor Red
+    Write-Host $_.Exception.Message
+    exit 1
 }
 
-function Install-Game {
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "       Nil Game Engine Installer      " -ForegroundColor Cyan
-    Write-Host "========================================" -ForegroundColor Cyan
-
-    if (-not (Test-Path $InstallDir)) {
-        New-Item -ItemType Directory -Path $InstallDir | Out-Null
-        Write-Host "Created installation directory: $InstallDir" -ForegroundColor Green
-    }
-
-    # Check for updates
-    $existing = Test-Path "$InstallDir\DoomEngine.ps1"
-    if ($existing) {
-        $check = Test-UpdateAvailable
-        if (-not $check.Needed) {
-            Write-Host "Installation is up to date." -ForegroundColor Green
-            $currentVer = Get-Content "$InstallDir\version.txt" -ErrorAction SilentlyContinue
-            Write-Host "Current Version: $currentVer" -ForegroundColor Gray
-            Write-Host "Launch game with: .\Play.ps1" -ForegroundColor Yellow
-            return
-        } else {
-            Write-Host "Update detected!" -ForegroundColor Yellow
-            Write-Host "Reasons: $($check.Reasons -join ', ')" -ForegroundColor Gray
-            $currentVer = Get-Content "$InstallDir\version.txt" -ErrorAction SilentlyContinue
-            Write-Host "Upgrading from: $currentVer" -ForegroundColor Gray
-        }
+# Compare
+if ($LocalHash -eq $RemoteHash -and -not $ForceUpdate) {
+    Write-Host "Up to date! (Commit: $LocalHash)" -ForegroundColor Green
+    # Verify files exist just in case
+    $missing = $Files | Where-Object { -not (Test-Path (Join-Path $InstallDir $_)) }
+    if ($missing) {
+        Write-Host "Some files missing. Re-installing..." -ForegroundColor Yellow
     } else {
-        Write-Host "New installation detected." -ForegroundColor Green
+        exit 0
     }
-
-    # Download Files
-    foreach ($file in $Files) {
-        Write-Host "Downloading $($file.Name)..." -NoNewline
-        try {
-            $url = "https://raw.githubusercontent.com/$RepoUser/$RepoName/$Branch/$($file.Name)"
-            Invoke-RestMethod -Uri $url -OutFile $file.Path -UseBasicParsing -ErrorAction Stop
-            Write-Host " Done" -ForegroundColor Green
-        } catch {
-            Write-Host " Failed: $_" -ForegroundColor Red
-            # If version.txt fails to download, create a placeholder based on date
-            if ($file.Name -eq "version.txt") {
-                "v1.0.0-auto" | Set-Content -Path $file.Path
-            }
-        }
+} else {
+    if ($LocalHash) {
+        Write-Host "Update Available! Updating from $LocalHash to $RemoteHash" -ForegroundColor Yellow
+    } else {
+        Write-Host "Installing new version ($RemoteHash)..." -ForegroundColor Yellow
     }
-
-    # Create Play.ps1 wrapper if missing
-    $playPath = "$InstallDir\Play.ps1"
-    if (-not (Test-Path $playPath)) {
-        @"
-# Nil Game Launcher
-& "$InstallDir\DoomEngine.ps1"
-"@ | Set-Content -Path $playPath
-    }
-
-    Write-Host "`n========================================" -ForegroundColor Cyan
-    Write-Host "Installation / Update Complete!" -ForegroundColor Green
-    $vContent = Get-Content "$InstallDir\version.txt" -ErrorAction SilentlyContinue
-    Write-Host "Version: $vContent" -ForegroundColor Cyan
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "Run the game with: .\Play.ps1" -ForegroundColor Yellow
-    Write-Host "Or directly: $InstallDir\DoomEngine.ps1" -ForegroundColor Gray
-    Write-Host "Add -Debug flag to see errors: .\DoomEngine.ps1 -Debug" -ForegroundColor Gray
 }
 
-Install-Game
+# Download Files
+foreach ($file in $Files) {
+    $url = "https://raw.githubusercontent.com/$RepoOwner/$RepoName/main/$file"
+    $dest = Join-Path $InstallDir $file
+    Write-Host "Downloading $file..." -NoNewline
+    try {
+        Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -ErrorAction Stop
+        Write-Host " Done" -ForegroundColor Green
+    } catch {
+        Write-Host " Failed" -ForegroundColor Red
+        Write-Host "Error downloading $file : $($_.Exception.Message)"
+    }
+}
+
+# Save Commit Hash
+$RemoteHash | Set-Content $HashFile -Encoding ASCII
+
+# Create Play.ps1 if it wasn't in the repo download (fallback)
+$PlayPath = Join-Path $InstallDir "Play.ps1"
+if (-not (Test-Path $PlayPath)) {
+    @"
+# Launcher for Nil Game
+& "$PSScriptRoot\DoomEngine.ps1" -Debug
+"@ | Set-Content $PlayPath
+}
+
+Write-Host "`nInstallation Complete!" -ForegroundColor Green
+Write-Host "Run the game with: .\Play.ps1" -ForegroundColor Cyan
+Write-Host "Or directly: $InstallDir\DoomEngine.ps1"
+Write-Host "Tip: Add -Debug flag to see errors if it crashes."
