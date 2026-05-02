@@ -1,58 +1,138 @@
 <#
 .SYNOPSIS
-    Installs the Nil Doom Engine from GitHub.
+    Nil Game Engine Installer & Updater
 .DESCRIPTION
-    Downloads the latest version of the DoomEngine.ps1 and creates a launcher.
+    Downloads, installs, and updates the Doom-style Raycasting Engine for PowerShell.
+    Supports version checking and seamless upgrades.
 .LINK
     https://github.com/johnesecat/nil
 #>
 
 param(
-    [string]$InstallPath = "$env:USERPROFILE\NilGame",
-    [string]$RepoUrl = "https://raw.githubusercontent.com/johnesecat/nil/main"
+    [switch]$Force,
+    [switch]$NoPrompt
 )
 
-Write-Host "=== Nil Doom Engine Installer ===" -ForegroundColor Cyan
+$RepoOwner = "johnesecat"
+$RepoName = "nil"
+$Branch = "main"
+$InstallDir = "$env:USERPROFILE\NilGame"
+$EngineFile = "DoomEngine.ps1"
+$VersionFile = "version.txt"
+$BaseUrl = "https://raw.githubusercontent.com/$RepoOwner/$RepoName/$Branch"
 
-# Create Directory
-if (-not (Test-Path $InstallPath)) {
-    New-Item -ItemType Directory -Path $InstallPath | Out-Null
-    Write-Host "Created directory: $InstallPath" -ForegroundColor Green
+# Colors
+$Cyan = [ConsoleColor]::Cyan
+$Green = [ConsoleColor]::Green
+$Yellow = [ConsoleColor]::Yellow
+$Red = [ConsoleColor]::Red
+
+function Write-Color {
+    param($Text, $Color)
+    Write-Host $Text -ForegroundColor $Color
+}
+
+Write-Color "=== Nil Game Engine Installer ===" $Cyan
+
+# 1. Determine Local Version
+$LocalVersion = "0.0.0"
+$IsInstalled = Test-Path "$InstallDir\$EngineFile"
+
+if ($IsInstalled) {
+    if (Test-Path "$InstallDir\$VersionFile") {
+        $LocalVersion = Get-Content "$InstallDir\$VersionFile"
+    } else {
+        $LocalVersion = "0.0.0 (Legacy)"
+    }
+    Write-Color "Existing installation found: v$LocalVersion" $Yellow
 } else {
-    Write-Host "Using existing directory: $InstallPath" -ForegroundColor Yellow
+    Write-Color "No existing installation found." $Green
 }
 
-Set-Location $InstallPath
-
-# Download Engine
-Write-Host "Downloading DoomEngine.ps1..." -NoNewline
+# 2. Fetch Remote Version
 try {
-    Invoke-WebRequest -Uri "$RepoUrl/DoomEngine.ps1" -OutFile "DoomEngine.ps1" -UseBasicParsing
-    Write-Host " Done!" -ForegroundColor Green
+    Write-Host "Checking for updates..." -NoNewline
+    $RemoteVersionRaw = Invoke-RestMethod -Uri "$BaseUrl/version.txt" -UseBasicParsing -ErrorAction Stop
+    $RemoteVersion = $RemoteVersionRaw.Trim()
+    Write-Host " Latest: v$RemoteVersion" -ForegroundColor Green
 } catch {
-    Write-Host " Failed!" -ForegroundColor Red
-    Write-Error "Could not download DoomEngine.ps1. Check your internet connection or repository URL."
-    exit 1
+    Write-Color "Failed to check remote version. Using latest available." $Yellow
+    $RemoteVersion = $LocalVersion # Assume up to date if check fails to prevent breakage
 }
 
-# Create Launcher
-$launcherContent = @"
+# 3. Compare Versions
+$ShouldInstall = $false
+$ShouldUpdate = $false
+
+if (-not $IsInstalled) {
+    $ShouldInstall = $true
+} elseif ($Force) {
+    $ShouldUpdate = $true
+    Write-Color "Force flag detected. Re-installing..." $Yellow
+} else {
+    # Simple string comparison for semantic versions (e.g., 1.0.0 vs 1.0.1)
+    if ($RemoteVersion -ne $LocalVersion) {
+        # In a real scenario, use [System.Version] but string compare works for simple increments
+        Write-Color "Update available: v$LocalVersion -> v$RemoteVersion" $Cyan
+        if ($NoPrompt) {
+            $ShouldUpdate = $true
+        } else {
+            $response = Read-Host "Do you want to update? (Y/n)"
+            if ([string]::IsNullOrEmpty($response) -or $response -match '^[Yy]') {
+                $ShouldUpdate = $true
+            } else {
+                Write-Color "Update skipped." $Yellow
+                exit 0
+            }
+        }
+    } else {
+        Write-Color "You are already running the latest version (v$LocalVersion)." $Green
+        exit 0
+    }
+}
+
+# 4. Perform Installation/Update
+if ($ShouldInstall -or $ShouldUpdate) {
+    try {
+        # Ensure Directory Exists
+        if (-not (Test-Path $InstallDir)) {
+            New-Item -ItemType Directory -Path $InstallDir | Out-Null
+        }
+
+        # Download Engine
+        Write-Host "Downloading $EngineFile..." -NoNewline
+        $ScriptContent = Invoke-RestMethod -Uri "$BaseUrl/$EngineFile" -UseBasicParsing
+        Set-Content -Path "$InstallDir\$EngineFile" -Value $ScriptContent -Encoding UTF8
+        Write-Host "Done" -ForegroundColor Green
+
+        # Download Version File
+        try {
+            $VersionContent = Invoke-RestMethod -Uri "$BaseUrl/version.txt" -UseBasicParsing
+            Set-Content -Path "$InstallDir\$VersionFile" -Value $VersionContent.Trim() -Encoding UTF8
+        } catch {
+            # Fallback if version file missing in repo
+            Set-Content -Path "$InstallDir\$VersionFile" -Value "unknown" -Encoding UTF8
+        }
+
+        # Create Launcher (Play.ps1) if missing or update it
+        $LauncherPath = "$InstallDir\Play.ps1"
+        $LauncherScript = @"
 # Nil Game Launcher
-Set-Location "$InstallPath"
-.\DoomEngine.ps1 -Width 100 -Height 50 -Resolution 2
+& "$InstallDir\DoomEngine.ps1"
 "@
+        Set-Content -Path $LauncherPath -Value $LauncherScript -Encoding UTF8
 
-$launcherContent | Out-File -FilePath "Play.ps1" -Encoding UTF8
-Write-Host "Created Play.ps1 launcher." -ForegroundColor Green
+        Write-Color "Installation Successful!" $Green
+        Write-Host "Location: $InstallDir"
+        Write-Host "To play, run: .\Play.ps1 inside the folder, or:"
+        Write-Color "& '$InstallDir\DoomEngine.ps1'" $Cyan
+        
+        if ($IsInstalled) {
+            Write-Color "Game updated from v$LocalVersion to v$RemoteVersion" $Green
+        }
 
-# Instructions
-Write-Host "`n=== Installation Complete ===" -ForegroundColor Cyan
-Write-Host "To play the game, run the following command:" -ForegroundColor White
-Write-Host "  cd $InstallPath" -ForegroundColor Gray
-Write-Host "  .\Play.ps1" -ForegroundColor Green
-Write-Host "`nControls:" -ForegroundColor White
-Write-Host "  W/A/S/D : Move" -ForegroundColor Gray
-Write-Host "  Q/E     : Turn Left/Right" -ForegroundColor Gray
-Write-Host "  SPACE   : Fire" -ForegroundColor Gray
-Write-Host "  PGUP/DN : Change Floors" -ForegroundColor Gray
-Write-Host "  ESC     : Quit" -ForegroundColor Gray
+    } catch {
+        Write-Color "Installation failed: $_" $Red
+        exit 1
+    }
+}
