@@ -19,10 +19,9 @@ param(
 # 0. PRE-INITIALIZATION & TYPE DEFINITIONS
 # ==============================================================================
 
+# Define Structs as a string block
+# NOTE: No 'using' statements here. Add-Type MemberDefinition implies them.
 $TypeDefs = @"
-using System;
-using System.Runtime.InteropServices;
-
 [StructLayout(LayoutKind.Explicit)]
 public struct INPUT_RECORD {
     [FieldOffset(0)] public ushort EventType;
@@ -68,15 +67,30 @@ public const int MOUSE_EVENT = 0x0002;
 
 try {
     $Global:InputTypes = Add-Type -MemberDefinition $TypeDefs -Name 'InputTypes' -Namespace 'Native' -PassThru
+    
     $Global:Win32 = Add-Type -MemberDefinition @"
-[DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GetStdHandle(int nStdHandle);
-[DllImport("kernel32.dll", SetLastError = true)] public static extern bool GetConsoleMode(IntPtr hConsoleOutput, ref uint lpMode);
-[DllImport("kernel32.dll", SetLastError = true)] public static extern bool SetConsoleMode(IntPtr hConsoleOutput, uint dwMode);
-[DllImport("kernel32.dll", SetLastError = true)] public static extern bool SetConsoleCursorPosition(IntPtr hConsoleOutput, int dwCursorPosition);
-[DllImport("kernel32.dll", SetLastError = true)] public static extern bool SetConsoleCursorInfo(IntPtr hConsoleOutput, ref CONSOLE_CURSOR_INFO lpConsoleCursorInfo);
-[DllImport("kernel32.dll", SetLastError = true)] public static extern bool ReadConsoleInput(IntPtr hConsoleInput, [Out] INPUT_RECORD[] lpBuffer, uint nLength, ref uint lpNumberOfEventsRead);
-[DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vKey);
+[DllImport("kernel32.dll", SetLastError = true)] 
+public static extern IntPtr GetStdHandle(int nStdHandle);
+
+[DllImport("kernel32.dll", SetLastError = true)] 
+public static extern bool GetConsoleMode(IntPtr hConsoleOutput, ref uint lpMode);
+
+[DllImport("kernel32.dll", SetLastError = true)] 
+public static extern bool SetConsoleMode(IntPtr hConsoleOutput, uint dwMode);
+
+[DllImport("kernel32.dll", SetLastError = true)] 
+public static extern bool SetConsoleCursorPosition(IntPtr hConsoleOutput, int dwCursorPosition);
+
+[DllImport("kernel32.dll", SetLastError = true)] 
+public static extern bool SetConsoleCursorInfo(IntPtr hConsoleOutput, ref CONSOLE_CURSOR_INFO lpConsoleCursorInfo);
+
+[DllImport("kernel32.dll", SetLastError = true)] 
+public static extern bool ReadConsoleInput(IntPtr hConsoleInput, [Out] INPUT_RECORD[] lpBuffer, uint nLength, ref uint lpNumberOfEventsRead);
+
+[DllImport("user32.dll")] 
+public static extern short GetAsyncKeyState(int vKey);
 "@ -Name 'Win32' -Namespace 'Native' -PassThru -UsingNamespace Native
+
 } catch {
     Write-Host "CRITICAL ERROR: Failed to load Win32 Types." -ForegroundColor Red
     Write-Host "Ensure you are running PowerShell 7+ on Windows." -ForegroundColor Yellow
@@ -122,8 +136,8 @@ try {
 # ==============================================================================
 # 1. GAME CONSTANTS
 # ==============================================================================
-$MapWidth = 40
-$MapHeight = 40
+$Global:MapWidth = 40
+$Global:MapHeight = 40
 $MaxFloors = 5
 $FOV = [Math]::PI / 3.0
 $Resolution = 2 
@@ -138,13 +152,13 @@ $VK_SHIFT = 0x10
 # 2. PROCEDURAL MAP GENERATION
 # ==============================================================================
 function Initialize-Map {
-    $global:Map = New-Object 'int[,,]' ($MapWidth, $MapHeight, $MaxFloors)
+    $global:Map = New-Object 'int[,,]' ($Global:MapWidth, $Global:MapHeight, $MaxFloors)
     
     for ($z = 0; $z -lt $MaxFloors; $z++) {
         # Noise
-        for ($x = 0; $x -lt $MapWidth; $x++) {
-            for ($y = 0; $y -lt $MapHeight; $y++) {
-                if ($x -eq 0 -or $x -eq $MapWidth-1 -or $y -eq 0 -or $y -eq $MapHeight-1) {
+        for ($x = 0; $x -lt $Global:MapWidth; $x++) {
+            for ($y = 0; $y -lt $Global:MapHeight; $y++) {
+                if ($x -eq 0 -or $x -eq $Global:MapWidth-1 -or $y -eq 0 -or $y -eq $Global:MapHeight-1) {
                     $global:Map[$x,$y,$z] = 1
                 } else {
                     if ((Get-Random) % 10 -lt 4) {
@@ -159,8 +173,8 @@ function Initialize-Map {
         # Cellular Automata Smoothing
         for ($i = 0; $i -lt 4; $i++) {
             $newMap = $global:Map.Clone()
-            for ($x = 1; $x -lt $MapWidth-1; $x++) {
-                for ($y = 1; $y -lt $MapHeight-1; $y++) {
+            for ($x = 1; $x -lt $Global:MapWidth-1; $x++) {
+                for ($y = 1; $y -lt $Global:MapHeight-1; $y++) {
                     $neighbors = 0
                     for ($dx = -1; $dx -le 1; $dx++) {
                         for ($dy = -1; $dy -le 1; $dy++) {
@@ -181,7 +195,7 @@ function Initialize-Map {
                 for ($dy = -2; $dy -le 2; $dy++) {
                     $gx = 20 + $dx
                     $gy = 20 + $dy
-                    if ($gx -gt 0 -and $gx -lt $MapWidth-1 -and $gy -gt 0 -and $gy -lt $MapHeight-1) {
+                    if ($gx -gt 0 -and $gx -lt $Global:MapWidth-1 -and $gy -gt 0 -and $gy -lt $Global:MapHeight-1) {
                         $global:Map[$gx, $gy, 0] = 0
                     }
                 }
@@ -194,8 +208,8 @@ function Initialize-Map {
             $attempts = 0
             while (-not $found -and $attempts -lt 100) {
                 $attempts++
-                $sx = (Get-Random) % ($MapWidth - 4) + 2
-                $sy = (Get-Random) % ($MapHeight - 4) + 2
+                $sx = (Get-Random) % ($Global:MapWidth - 4) + 2
+                $sy = (Get-Random) % ($Global:MapHeight - 4) + 2
                 if ($global:Map[$sx, $sy, $z] -eq 0) {
                     $global:Map[$sx, $sy, $z] = 2 # Stair Up
                     # Clear landing above
@@ -211,7 +225,7 @@ function Initialize-Map {
 }
 
 # ==============================================================================
-# 3. ENEMY AI CLASS (A* Pathfinding) - FIXED SCOPING
+# 3. ENEMY AI CLASS (A* Pathfinding)
 # ==============================================================================
 class Enemy {
     [float]$X
@@ -253,8 +267,8 @@ class Enemy {
             $mx = [int]$cx
             $my = [int]$cy
             
-            # Bounds Check with explicit $global: scope
-            if ($mx -ge 0 -and $mx -lt $global:MapWidth -and $my -ge 0 -and $my -lt $global:MapHeight) {
+            # Bounds Check using Global vars
+            if ($mx -ge 0 -and $mx -lt $Global:MapWidth -and $my -ge 0 -and $my -lt $Global:MapHeight) {
                 if ($global:Map[$mx, $my, $this.Z] -gt 0 -and $global:Map[$mx, $my, $this.Z] -lt 2) {
                     return $false
                 }
@@ -315,8 +329,8 @@ class Enemy {
             $ix = [int]$nx
             $iy = [int]$ny
             
-            # Bounds Check with explicit $global: scope
-            if ($ix -ge 0 -and $ix -lt $global:MapWidth -and $iy -ge 0 -and $iy -lt $global:MapHeight) {
+            # Bounds Check using Global vars
+            if ($ix -ge 0 -and $ix -lt $Global:MapWidth -and $iy -ge 0 -and $iy -lt $Global:MapHeight) {
                 if ($global:Map[$ix, $iy, $this.Z] -eq 0 -or $global:Map[$ix, $iy, $this.Z] -ge 2) {
                     $this.X = $nx
                     $this.Y = $ny
@@ -372,8 +386,8 @@ class Enemy {
                 $nx = [int]$np[0]
                 $ny = [int]$np[1]
                 
-                # Bounds Check with explicit $global: scope
-                if ($nx -lt 0 -or $nx -ge $global:MapWidth -or $ny -lt 0 -or $ny -ge $global:MapHeight) { continue }
+                # Bounds Check using Global vars
+                if ($nx -lt 0 -or $nx -ge $Global:MapWidth -or $ny -lt 0 -or $ny -ge $Global:MapHeight) { continue }
                 if ($global:Map[$nx, $ny, $this.Z] -gt 0 -and $global:Map[$nx, $ny, $this.Z] -lt 2) { continue }
                 
                 $tentativeG = $gScore[$currentKey] + 1
@@ -426,8 +440,8 @@ $Global:Enemies = New-Object System.Collections.Generic.List[Enemy]
 
 function Spawn-Enemies {
     for ($i = 0; $i -lt 10; $i++) {
-        $ex = (Get-Random) % ($MapWidth - 2) + 1
-        $ey = (Get-Random) % ($MapHeight - 2) + 1
+        $ex = (Get-Random) % ($Global:MapWidth - 2) + 1
+        $ey = (Get-Random) % ($Global:MapHeight - 2) + 1
         $ez = (Get-Random) % $MaxFloors
         if ($global:Map[$ex, $ey, $ez] -eq 0) {
             if ([Math]::Sqrt((($ex-20)*($ex-20)) + (($ey-20)*($ey-20))) -gt 5) {
@@ -556,7 +570,7 @@ function Handle-Input {
     $iy = [int]$Global:GameState.PlayerY
     $iz = $Global:GameState.PlayerZ
     
-    if ($ix -ge 0 -and $ix -lt $MapWidth -and $iy -ge 0 -and $iy -lt $MapHeight) {
+    if ($ix -ge 0 -and $ix -lt $Global:MapWidth -and $iy -ge 0 -and $iy -lt $Global:MapHeight) {
         if ($global:Map[$ix, $iy, $iz] -eq 0 -or $global:Map[$ix, $iy, $iz] -ge 2) {
             $Global:GameState.PlayerX = $newX
         }
@@ -564,7 +578,7 @@ function Handle-Input {
     
     $ix = [int]$Global:GameState.PlayerX
     $iy = [int]$newY
-    if ($ix -ge 0 -and $ix -lt $MapWidth -and $iy -ge 0 -and $iy -lt $MapHeight) {
+    if ($ix -ge 0 -and $ix -lt $Global:MapWidth -and $iy -ge 0 -and $iy -lt $Global:MapHeight) {
         if ($global:Map[$ix, $iy, $iz] -eq 0 -or $global:Map[$ix, $iy, $iz] -ge 2) {
             $Global:GameState.PlayerY = $newY
         }
@@ -639,9 +653,9 @@ function Render-Frame {
             if ($sideDistX -lt $sideDistY) { $sideDistX += $deltaDistX; $mapX += $stepX; $side = 0 }
             else { $sideDistY += $deltaDistY; $mapY += $stepY; $side = 1 }
             
-            if ($mapX -lt 0 -or $mapX -ge $MapWidth -or $mapY -lt 0 -or $mapY -ge $MapHeight) { 
+            if ($mapX -lt 0 -or $mapX -ge $Global:MapWidth -or $mapY -lt 0 -or $mapY -ge $Global:MapHeight) { 
                 $hit = 1; $wallType = 1 
-            } elseif ($mapX -ge 0 -and $mapX -lt $MapWidth -and $mapY -ge 0 -and $mapY -lt $MapHeight) {
+            } elseif ($mapX -ge 0 -and $mapX -lt $Global:MapWidth -and $mapY -ge 0 -and $mapY -lt $Global:MapHeight) {
                 if ($global:Map[$mapX, $mapY, $Global:GameState.PlayerZ] -gt 0) {
                     $hit = 1
                     $wallType = $global:Map[$mapX, $mapY, $Global:GameState.PlayerZ]
