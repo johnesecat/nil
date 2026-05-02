@@ -16,11 +16,9 @@ param(
 )
 
 # ==============================================================================
-# 0. PRE-INITIALIZATION & TYPE DEFINITIONS (Must run first)
+# 0. PRE-INITIALIZATION & TYPE DEFINITIONS
 # ==============================================================================
 
-# Define Structs as a string block
-# NOTE: 'using' statements are allowed here because this is passed as a full type definition
 $TypeDefs = @"
 using System;
 using System.Runtime.InteropServices;
@@ -69,27 +67,16 @@ public const int MOUSE_EVENT = 0x0002;
 "@
 
 try {
-    # Load Input Types
     $Global:InputTypes = Add-Type -MemberDefinition $TypeDefs -Name 'InputTypes' -Namespace 'Native' -PassThru
-    
-    # Load Win32 API Methods
     $Global:Win32 = Add-Type -MemberDefinition @"
-[DllImport("kernel32.dll", SetLastError = true)] 
-public static extern IntPtr GetStdHandle(int nStdHandle);
-[DllImport("kernel32.dll", SetLastError = true)] 
-public static extern bool GetConsoleMode(IntPtr hConsoleOutput, ref uint lpMode);
-[DllImport("kernel32.dll", SetLastError = true)] 
-public static extern bool SetConsoleMode(IntPtr hConsoleOutput, uint dwMode);
-[DllImport("kernel32.dll", SetLastError = true)] 
-public static extern bool SetConsoleCursorPosition(IntPtr hConsoleOutput, int dwCursorPosition);
-[DllImport("kernel32.dll", SetLastError = true)] 
-public static extern bool SetConsoleCursorInfo(IntPtr hConsoleOutput, ref CONSOLE_CURSOR_INFO lpConsoleCursorInfo);
-[DllImport("kernel32.dll", SetLastError = true)] 
-public static extern bool ReadConsoleInput(IntPtr hConsoleInput, [Out] INPUT_RECORD[] lpBuffer, uint nLength, ref uint lpNumberOfEventsRead);
-[DllImport("user32.dll")] 
-public static extern short GetAsyncKeyState(int vKey);
-"@ -Name 'Win32' -Namespace 'Native' -PassThru -UsingNamespace Native -UsingNamespace Native.InputTypes
-
+[DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GetStdHandle(int nStdHandle);
+[DllImport("kernel32.dll", SetLastError = true)] public static extern bool GetConsoleMode(IntPtr hConsoleOutput, ref uint lpMode);
+[DllImport("kernel32.dll", SetLastError = true)] public static extern bool SetConsoleMode(IntPtr hConsoleOutput, uint dwMode);
+[DllImport("kernel32.dll", SetLastError = true)] public static extern bool SetConsoleCursorPosition(IntPtr hConsoleOutput, int dwCursorPosition);
+[DllImport("kernel32.dll", SetLastError = true)] public static extern bool SetConsoleCursorInfo(IntPtr hConsoleOutput, ref CONSOLE_CURSOR_INFO lpConsoleCursorInfo);
+[DllImport("kernel32.dll", SetLastError = true)] public static extern bool ReadConsoleInput(IntPtr hConsoleInput, [Out] INPUT_RECORD[] lpBuffer, uint nLength, ref uint lpNumberOfEventsRead);
+[DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vKey);
+"@ -Name 'Win32' -Namespace 'Native' -PassThru -UsingNamespace Native
 } catch {
     Write-Host "CRITICAL ERROR: Failed to load Win32 Types." -ForegroundColor Red
     Write-Host "Ensure you are running PowerShell 7+ on Windows." -ForegroundColor Yellow
@@ -139,7 +126,7 @@ $MapWidth = 40
 $MapHeight = 40
 $MaxFloors = 5
 $FOV = [Math]::PI / 3.0
-$Resolution = 2 # Render every Nth column for performance
+$Resolution = 2 
 
 # Keys
 $VK_W = 0x57; $VK_S = 0x53; $VK_A = 0x41; $VK_D = 0x44
@@ -224,7 +211,7 @@ function Initialize-Map {
 }
 
 # ==============================================================================
-# 3. ENEMY AI CLASS (A* Pathfinding)
+# 3. ENEMY AI CLASS (A* Pathfinding) - FIXED SCOPING
 # ==============================================================================
 class Enemy {
     [float]$X
@@ -264,9 +251,9 @@ class Enemy {
             $cx += $sx
             $cy += $sy
             $mx = [int]$cx
-            $my = [int]$my
+            $my = [int]$cy
             
-            # Bounds Check
+            # Bounds Check with explicit $global: scope
             if ($mx -ge 0 -and $mx -lt $global:MapWidth -and $my -ge 0 -and $my -lt $global:MapHeight) {
                 if ($global:Map[$mx, $my, $this.Z] -gt 0 -and $global:Map[$mx, $my, $this.Z] -lt 2) {
                     return $false
@@ -328,7 +315,7 @@ class Enemy {
             $ix = [int]$nx
             $iy = [int]$ny
             
-            # Bounds Check
+            # Bounds Check with explicit $global: scope
             if ($ix -ge 0 -and $ix -lt $global:MapWidth -and $iy -ge 0 -and $iy -lt $global:MapHeight) {
                 if ($global:Map[$ix, $iy, $this.Z] -eq 0 -or $global:Map[$ix, $iy, $this.Z] -ge 2) {
                     $this.X = $nx
@@ -385,7 +372,7 @@ class Enemy {
                 $nx = [int]$np[0]
                 $ny = [int]$np[1]
                 
-                # Bounds Check
+                # Bounds Check with explicit $global: scope
                 if ($nx -lt 0 -or $nx -ge $global:MapWidth -or $ny -lt 0 -or $ny -ge $global:MapHeight) { continue }
                 if ($global:Map[$nx, $ny, $this.Z] -gt 0 -and $global:Map[$nx, $ny, $this.Z] -lt 2) { continue }
                 
@@ -590,7 +577,6 @@ function Handle-Input {
     
     if ($tile -eq 2) { # Stair Up
         if ($iz -lt $MaxFloors - 1) {
-            # Simple transition for now, can be smoothed with Z-interpolation
             $Global:GameState.PlayerZ++
             $Global:GameState.PlayerX = $cx + 0.5
             $Global:GameState.PlayerY = $cy + 0.5
