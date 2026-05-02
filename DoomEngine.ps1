@@ -16,107 +16,106 @@ param(
 # 0. PRE-INITIALIZATION & TYPE DEFINITIONS
 # ==============================================================================
 
-# We must define the FULL C# code including Namespace and Usings explicitly.
-# Add-Type wraps code in a default namespace if none is provided, which breaks 'using' placement.
-# By providing the namespace 'Native', we control the structure entirely.
+# Define Structs as a string block. 
+# NOTE: We do NOT include 'namespace Native' here. We use the -Namespace parameter in Add-Type.
+# 'using' statements MUST be at the very top of the string.
 $TypeDefs = @"
 using System;
 using System.Runtime.InteropServices;
 
-namespace Native {
-    [StructLayout(LayoutKind.Explicit)]
-    public struct INPUT_RECORD {
-        [FieldOffset(0)] public ushort EventType;
-        [FieldOffset(4)] public KEY_EVENT_RECORD KeyEvent;
-        [FieldOffset(4)] public MOUSE_EVENT_RECORD MouseEvent;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct KEY_EVENT_RECORD {
-        public bool bKeyDown;
-        public ushort wRepeatCount;
-        public ushort wVirtualKeyCode;
-        public ushort wVirtualScanCode;
-        public char uChar;
-        public uint dwControlKeyState;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct MOUSE_EVENT_RECORD {
-        public int dwMousePosition_X;
-        public int dwMousePosition_Y;
-        public uint dwButtonState;
-        public uint dwControlKeyState;
-        public uint dwEventFlags;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct CONSOLE_CURSOR_INFO {
-        public uint dwSize;
-        public bool bVisible;
-    }
-
-    public static class Win32Constants {
-        public const int STD_INPUT_HANDLE = -10;
-        public const int STD_OUTPUT_HANDLE = -11;
-        public const int ENABLE_MOUSE_INPUT = 0x0010;
-        public const int ENABLE_EXTENDED_FLAGS = 0x0080;
-        public const int ENABLE_WINDOW_INPUT = 0x0008;
-        public const int ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
-        public const int ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
-        public const int KEY_EVENT = 0x0001;
-        public const int MOUSE_EVENT = 0x0002;
-    }
-
-    public static class Win32Methods {
-        [DllImport("kernel32.dll", SetLastError = true)]
-        public static extern IntPtr GetStdHandle(int nStdHandle);
-        
-        [DllImport("kernel32.dll", SetLastError = true)]
-        public static extern bool GetConsoleMode(IntPtr hConsoleOutput, ref uint lpMode);
-        
-        [DllImport("kernel32.dll", SetLastError = true)]
-        public static extern bool SetConsoleMode(IntPtr hConsoleOutput, uint dwMode);
-        
-        [DllImport("kernel32.dll", SetLastError = true)]
-        public static extern bool SetConsoleCursorPosition(IntPtr hConsoleOutput, int dwCursorPosition);
-        
-        [DllImport("kernel32.dll", SetLastError = true)]
-        public static extern bool SetConsoleCursorInfo(IntPtr hConsoleOutput, ref CONSOLE_CURSOR_INFO lpConsoleCursorInfo);
-        
-        [DllImport("kernel32.dll", SetLastError = true)]
-        public static extern bool ReadConsoleInput(IntPtr hConsoleInput, [Out] INPUT_RECORD[] lpBuffer, uint nLength, ref uint lpNumberOfEventsRead);
-        
-        [DllImport("user32.dll")]
-        public static extern short GetAsyncKeyState(int vKey);
-    }
+[StructLayout(LayoutKind.Explicit)]
+public struct INPUT_RECORD {
+    [FieldOffset(0)] public ushort EventType;
+    [FieldOffset(4)] public KEY_EVENT_RECORD KeyEvent;
+    [FieldOffset(4)] public MOUSE_EVENT_RECORD MouseEvent;
 }
+
+[StructLayout(LayoutKind.Sequential)]
+public struct KEY_EVENT_RECORD {
+    public bool bKeyDown;
+    public ushort wRepeatCount;
+    public ushort wVirtualKeyCode;
+    public ushort wVirtualScanCode;
+    public char uChar;
+    public uint dwControlKeyState;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct MOUSE_EVENT_RECORD {
+    public int dwMousePosition_X;
+    public int dwMousePosition_Y;
+    public uint dwButtonState;
+    public uint dwControlKeyState;
+    public uint dwEventFlags;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct CONSOLE_CURSOR_INFO {
+    public uint dwSize;
+    public bool bVisible;
+}
+
+public const int STD_INPUT_HANDLE = -10;
+public const int STD_OUTPUT_HANDLE = -11;
+public const int ENABLE_MOUSE_INPUT = 0x0010;
+public const int ENABLE_EXTENDED_FLAGS = 0x0080;
+public const int ENABLE_WINDOW_INPUT = 0x0008;
+public const int ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
+public const int ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
+public const int KEY_EVENT = 0x0001;
+public const int MOUSE_EVENT = 0x0002;
 "@
 
 try {
-    # Compile the entire block above as one unit. 
-    # Since we defined 'namespace Native', the types will be available as Native.INPUT_RECORD etc.
-    Add-Type -MemberDefinition $TypeDefs -Name 'Win32Api' -Language CSharp -ErrorAction Stop
+    # Load Input Types
+    $Global:InputTypes = Add-Type -MemberDefinition $TypeDefs -Name 'InputTypes' -Namespace 'Native' -PassThru
+
+    # Load Win32 API Functions
+    # We reference Native.INPUT_RECORD etc. inside the C# code if needed, but here we just define methods.
+    $Global:Win32 = Add-Type -MemberDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using Native; // Reference the namespace we just created
+
+public static class Win32Methods {
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr GetStdHandle(int nStdHandle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool GetConsoleMode(IntPtr hConsoleOutput, ref uint lpMode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool SetConsoleMode(IntPtr hConsoleOutput, uint dwMode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool SetConsoleCursorPosition(IntPtr hConsoleOutput, int dwCursorPosition);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool SetConsoleCursorInfo(IntPtr hConsoleOutput, ref CONSOLE_CURSOR_INFO lpConsoleCursorInfo);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool ReadConsoleInput(IntPtr hConsoleInput, [Out] INPUT_RECORD[] lpBuffer, uint nLength, ref uint lpNumberOfEventsRead);
+
+    [DllImport("user32.dll")]
+    public static extern short GetAsyncKeyState(int vKey);
+}
+"@ -Name 'Win32Methods' -Namespace 'Native' -PassThru -UsingNamespace Native
+
 } catch {
     Write-Host "CRITICAL ERROR: Failed to compile Win32 Types." -ForegroundColor Red
-    Write-Host "Error Details: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "Error Details: $($_.Exception.Message)" -ForegroundColor Yellow
     Write-Host "Context: The C# struct definition has a syntax error." -ForegroundColor Yellow
     if (-not $Debug) { Read-Host "Press Enter to exit" }
     exit 1
 }
 
-# Aliases for cleaner code
-$Global:InputTypes = [Native.INPUT_RECORD]
-$Global:Win32 = [Native.Win32Methods]
-$Global:Constants = [Native.Win32Constants]
-
 # Constants
-$STD_INPUT = [Native.Win32Methods]::GetStdHandle([Native.Win32Constants]::STD_INPUT_HANDLE)
-$STD_OUTPUT = [Native.Win32Methods]::GetStdHandle([Native.Win32Constants]::STD_OUTPUT_HANDLE)
-$ENABLE_MOUSE = [Native.Win32Constants]::ENABLE_MOUSE_INPUT
-$ENABLE_EXTENDED = [Native.Win32Constants]::ENABLE_EXTENDED_FLAGS
-$ENABLE_VT_INPUT = [Native.Win32Constants]::ENABLE_VIRTUAL_TERMINAL_INPUT
-$ENABLE_VT_PROCESS = [Native.Win32Constants]::ENABLE_VIRTUAL_TERMINAL_PROCESSING
+$STD_INPUT = [Native.Win32Methods]::GetStdHandle(-10)
+$STD_OUTPUT = [Native.Win32Methods]::GetStdHandle(-11)
+$ENABLE_MOUSE = 0x0010
+$ENABLE_EXTENDED = 0x0080
+$ENABLE_VT_INPUT = 0x0200
+$ENABLE_VT_PROCESS = 0x0004
 
 # Setup Console Mode
 $OriginalInputMode = 0
@@ -128,7 +127,7 @@ $OriginalOutputMode = 0
 [Native.Win32Methods]::SetConsoleMode($STD_OUTPUT, ($OriginalOutputMode -bor $ENABLE_VT_PROCESS))
 
 # Hide Cursor
-$CursorInfo = New-Object Native.CONSOLE_CURSOR_INFO
+$CursorInfo = New-Object Native.InputTypes+CONSOLE_CURSOR_INFO
 $CursorInfo.dwSize = 1
 $CursorInfo.bVisible = $false
 [Native.Win32Methods]::SetConsoleCursorInfo($STD_OUTPUT, [ref]$CursorInfo)
@@ -234,7 +233,7 @@ function Initialize-Map {
 }
 
 # ==============================================================================
-# 3. ENEMY AI CLASS
+# 3. ENEMY AI CLASS (A* Pathfinding)
 # ==============================================================================
 class Enemy {
     [float]$X
@@ -369,13 +368,12 @@ class Enemy {
             $currentKey = $null
             $lowestF = 999999
             foreach ($k in $openSet) {
-                if ($fScore.ContainsKey($k) -and $fScore[$k] -lt $lowestF) {
+                if ($fScore[$k] -lt $lowestF) {
                     $lowestF = $fScore[$k]
                     $currentKey = $k
                 }
             }
             
-            if ($null -eq $currentKey) { break }
             if ($currentKey -eq "$ex,$ey") { $found = $true; break }
             
             $openSet.Remove($currentKey) | Out-Null
@@ -481,14 +479,14 @@ function Shoot {
 }
 
 function Handle-Input {
-    $events = New-Object Native.INPUT_RECORD[] 16
+    $events = New-Object Native.InputTypes+INPUT_RECORD[] 16
     $numRead = 0
     [Native.Win32Methods]::ReadConsoleInput($STD_INPUT, $events, 16, [ref]$numRead) | Out-Null
     
     for ($i = 0; $i -lt $numRead; $i++) {
         $ev = $events[$i]
         
-        if ($ev.EventType -eq 1) {
+        if ($ev.EventType -eq 1) { 
             $key = $ev.KeyEvent.wVirtualKeyCode
             $down = $ev.KeyEvent.bKeyDown
             
@@ -518,8 +516,8 @@ function Handle-Input {
             }
         }
         
-        if ($ev.EventType -eq 2) {
-            if ($ev.MouseEvent.dwEventFlags -eq 0) {
+        if ($ev.EventType -eq 2) { 
+            if ($ev.MouseEvent.dwEventFlags -eq 0) { 
                 $mx = $ev.MouseEvent.dwMousePosition_X
                 $my = $ev.MouseEvent.dwMousePosition_Y
                 
@@ -592,7 +590,7 @@ function Handle-Input {
     $cy = [int]$Global:GameState.PlayerY
     $tile = $global:Map[$cx, $cy, $iz]
     
-    if ($tile -eq 2) {
+    if ($tile -eq 2) { 
         if ($iz -lt $MaxFloors - 1) {
             $Global:GameState.PlayerZ++
             $Global:GameState.PlayerX = $cx + 0.5
