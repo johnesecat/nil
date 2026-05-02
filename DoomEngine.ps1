@@ -129,7 +129,6 @@ try {
     $Host.UI.RawUI.WindowSize = New-Object System.Management.Automation.Host.Size($Width, $Height)
     $Host.UI.RawUI.CursorPosition = New-Object System.Management.Automation.Host.Coordinates(0,0)
 } catch {
-    # Fallback if raw UI access fails (some hosts)
     Write-Host "Warning: Could not set buffer size automatically. Resize terminal manually." -ForegroundColor Yellow
 }
 
@@ -165,7 +164,13 @@ function Initialize-Map {
                 if ($x -eq 0 -or $x -eq $MapWidth-1 -or $y -eq 0 -or $y -eq $MapHeight-1) {
                     $global:Map[$x,$y,$z] = 1
                 } else {
-                    $global:Map[$x,$y,$z] = (Get-Random) % 10 -lt 4 ? 1 : 0
+                    # Fixed: Replaced ternary operator with if/else
+                    $randVal = Get-Random -Maximum 10
+                    if ($randVal -lt 4) {
+                        $global:Map[$x,$y,$z] = 1
+                    } else {
+                        $global:Map[$x,$y,$z] = 0
+                    }
                 }
             }
         }
@@ -220,11 +225,6 @@ function Initialize-Map {
                 }
             }
         }
-        
-        # Add Down Stairs markers on upper floors
-        if ($z -gt 0) {
-             # Logic handled by generation order, but we can mark specific spots if needed
-        }
     }
 }
 
@@ -270,7 +270,9 @@ class Enemy {
             $cy += $sy
             $mx = [int]$cx
             $my = [int]$cy
-            if ($mx -ge 0 -and $mx -lt $MapWidth -and $my -ge 0 -and $my -lt $MapHeight) {
+            
+            # Fixed: Added $global: scope to map access
+            if ($mx -ge 0 -and $mx -lt $global:MapWidth -and $my -ge 0 -and $my -lt $global:MapHeight) {
                 if ($global:Map[$mx, $my, $this.Z] -gt 0 -and $global:Map[$mx, $my, $this.Z] -lt 2) {
                     return $false
                 }
@@ -331,7 +333,9 @@ class Enemy {
             
             $ix = [int]$nx
             $iy = [int]$ny
-            if ($ix -ge 0 -and $ix -lt $MapWidth -and $iy -ge 0 -and $iy -lt $MapHeight) {
+            
+            # Fixed: Added $global: scope and bounds checks
+            if ($ix -ge 0 -and $ix -lt $global:MapWidth -and $iy -ge 0 -and $iy -lt $global:MapHeight) {
                 if ($global:Map[$ix, $iy, $this.Z] -eq 0 -or $global:Map[$ix, $iy, $this.Z] -ge 2) {
                     $this.X = $nx
                     $this.Y = $ny
@@ -387,7 +391,8 @@ class Enemy {
                 $nx = [int]$np[0]
                 $ny = [int]$np[1]
                 
-                if ($nx -lt 0 -or $nx -ge $MapWidth -or $ny -lt 0 -or $ny -ge $MapHeight) { continue }
+                # Fixed: Added $global: scope
+                if ($nx -lt 0 -or $nx -ge $global:MapWidth -or $ny -lt 0 -or $ny -ge $global:MapHeight) { continue }
                 if ($global:Map[$nx, $ny, $this.Z] -gt 0 -and $global:Map[$nx, $ny, $this.Z] -lt 2) { continue }
                 
                 $tentativeG = $gScore[$currentKey] + 1
@@ -541,6 +546,7 @@ function Handle-Input {
     $iy = [int]$Global:GameState.PlayerY
     $iz = $Global:GameState.PlayerZ
     
+    # Fixed: Added bounds checks
     if ($ix -ge 0 -and $ix -lt $MapWidth -and $iy -ge 0 -and $iy -lt $MapHeight) {
         if ($global:Map[$ix, $iy, $iz] -eq 0 -or $global:Map[$ix, $iy, $iz] -ge 2) {
             $Global:GameState.PlayerX = $newX
@@ -549,6 +555,7 @@ function Handle-Input {
     
     $ix = [int]$Global:GameState.PlayerX
     $iy = [int]$newY
+    # Fixed: Added bounds checks
     if ($ix -ge 0 -and $ix -lt $MapWidth -and $iy -ge 0 -and $iy -lt $MapHeight) {
         if ($global:Map[$ix, $iy, $iz] -eq 0 -or $global:Map[$ix, $iy, $iz] -ge 2) {
             $Global:GameState.PlayerY = $newY
@@ -557,7 +564,12 @@ function Handle-Input {
     
     $cx = [int]$Global:GameState.PlayerX
     $cy = [int]$Global:GameState.PlayerY
-    $tile = $global:Map[$cx, $cy, $iz]
+    
+    # Safe tile lookup
+    $tile = 0
+    if ($cx -ge 0 -and $cx -lt $MapWidth -and $cy -ge 0 -and $cy -lt $MapHeight) {
+        $tile = $global:Map[$cx, $cy, $iz]
+    }
     
     if ($tile -eq 2) {
         if ($iz -lt $MaxFloors - 1) {
@@ -606,6 +618,10 @@ function Render-Frame {
         $mapX = [int]$Global:GameState.PlayerX
         $mapY = [int]$Global:GameState.PlayerY
         
+        # Prevent division by zero
+        if ($rayDirX -eq 0) { $rayDirX = 0.0001 }
+        if ($rayDirY -eq 0) { $rayDirY = 0.0001 }
+
         $deltaDistX = [Math]::Abs(1 / $rayDirX)
         $deltaDistY = [Math]::Abs(1 / $rayDirY)
         
@@ -623,7 +639,9 @@ function Render-Frame {
             if ($sideDistX -lt $sideDistY) { $sideDistX += $deltaDistX; $mapX += $stepX; $side = 0 }
             else { $sideDistY += $deltaDistY; $mapY += $stepY; $side = 1 }
             
-            if ($mapX -lt 0 -or $mapX -ge $MapWidth -or $mapY -lt 0 -or $mapY -ge $MapHeight) { $hit = 1; $wallType = 1 }
+            if ($mapX -lt 0 -or $mapX -ge $MapWidth -or $mapY -lt 0 -or $mapY -ge $MapHeight) { 
+                $hit = 1; $wallType = 1 
+            }
             elseif ($mapX -ge 0 -and $mapX -lt $MapWidth -and $mapY -ge 0 -and $mapY -lt $MapHeight) {
                 if ($global:Map[$mapX, $mapY, $Global:GameState.PlayerZ] -gt 0) {
                     $hit = 1
@@ -713,8 +731,6 @@ function Render-Frame {
     # Draw Weapon
     $wAnim = $Global:GameState.WeaponAnim
     if ($wAnim -gt 0) { $Global:GameState.WeaponAnim-- }
-    $weaponY = $Height - 10 + $wAnim
-    $weaponX = ($Width / 2) - 2
     
     # Output Buffer
     $output = New-Object System.Text.StringBuilder
